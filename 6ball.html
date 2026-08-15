@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>6ボールパズル シミュレーター（完全版）</title>
+    <style>
+      body {
+        background-color: #222;
+        color: #fff;
+        font-family: sans-serif;
+        text-align: center;
+        margin: 0;
+        padding: 20px;
+      }
+      #game-wrapper {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 20px;
+        margin-top: 20px;
+      }
+      #main-board {
+        background: #333;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+      }
+      #side-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+      }
+      .panel-box {
+        background: #333;
+        padding: 15px;
+        border-radius: 10px;
+        border: 4px solid #555;
+        text-align: center;
+      }
+      canvas {
+        background: #111;
+        border: 4px solid #555;
+        border-radius: 5px;
+        display: block;
+      }
+      #nextCanvas {
+        border: none;
+        background: transparent;
+        width: 80px;
+        height: 80px;
+        margin: 0 auto;
+      }
+      .controls {
+        margin-top: 15px;
+        line-height: 2.5;
+      }
+      button {
+        padding: 8px 12px;
+        font-size: 14px;
+        font-weight: bold;
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        margin: 0 2px;
+      }
+      button:hover {
+        background: #0056b3;
+      }
+      .info {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #aaa;
+        line-height: 1.5;
+        text-align: left;
+        display: inline-block;
+      }
+      #statusDisplay {
+        font-size: 18px;
+        font-weight: bold;
+        color: #ff4757;
+        height: 24px;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>6ボールパズル シミュレーター</h1>
+    <div id="game-wrapper">
+      <div id="main-board">
+        <canvas id="gameCanvas" width="420" height="560"></canvas>
+        <div id="statusDisplay"></div>
+        <div class="controls">
+          <button id="btnLeft">← 左</button>
+          <button id="btnUp">↻ 回転 (UP)</button>
+          <button id="btnRight">右 →</button><br />
+          <button id="btnDown">↓ 少し落とす</button>
+          <button id="btnDrop">一気に落とす (SPACE)</button>
+        </div>
+        <div class="info">
+          <ul>
+            <li>
+              <strong>[←][→]</strong> 移動 /
+              <strong>[↑]</strong> 回転（1周6回転）
+            </li>
+            <li>
+              <strong>[↓]</strong> 少し落とす /
+              <strong>[SPACE]</strong> ドロップ・確定
+            </li>
+            <li>同色6個以上で消滅！連鎖中は「左」に滑り落ちます。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div id="side-panel">
+        <div class="panel-box">
+          <h3 style="margin-top: 0; color: #aaa">NEXT</h3>
+          <canvas id="nextCanvas" width="80" height="80"></canvas>
+        </div>
+        <div class="panel-box">
+          <h3 style="margin-top: 0; color: #aaa">SCORE</h3>
+          <div id="scoreDisplay" style="font-size: 24px; font-weight: bold">
+            0 連鎖
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+      const nextCanvas = document.getElementById("nextCanvas");
+      const nextCtx = nextCanvas.getContext("2d");
+
+      const ROWS = 17;
+      const COLS = 11;
+      const BALL_RADIUS = 16;
+      const ROW_HEIGHT = 28;
+      const X_OFFSET = 30;
+      // ▼ ここを 40 から 80 に変更して、盤面全体を下にずらしました ▼
+      const Y_OFFSET = 80;
+
+      const COLORS = [
+        "#111",
+        "#ff4757",
+        "#1e90ff",
+        "#2ed573",
+        "#ffa502",
+        "#9b59b6",
+      ];
+      let grid = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+
+      const STATE = { PLAYING: 0, CHOICE: 1, SETTLING: 2, CHECKING: 3 };
+      let gameState = STATE.PLAYING;
+
+      let currentPiece = null;
+      let nextColors = generateRandomColors();
+      let choiceData = null;
+      let comboCount = 0;
+
+      function generateRandomColors() {
+        return [
+          Math.floor(Math.random() * 5) + 1,
+          Math.floor(Math.random() * 5) + 1,
+          Math.floor(Math.random() * 5) + 1,
+        ];
+      }
+
+      function getGridPos(px, py) {
+        let r = Math.round((py - Y_OFFSET) / ROW_HEIGHT);
+        let isOdd = Math.abs(r) % 2 === 1;
+        let c = Math.round(
+          (px - X_OFFSET - (isOdd ? BALL_RADIUS : 0)) / (BALL_RADIUS * 2),
+        );
+        return { r, c };
+      }
+
+      function spawnPiece() {
+        comboCount = 0;
+        document.getElementById("scoreDisplay").innerText = `0 連鎖`;
+
+        let centerCol = Math.floor(COLS / 2);
+        currentPiece = {
+          x: X_OFFSET + centerCol * BALL_RADIUS * 2,
+          y: Y_OFFSET - ROW_HEIGHT * 2, // 盤面が下がったので、キャンバス内にすっぽり収まります
+          colors: nextColors,
+          rot: 0,
+        };
+        nextColors = generateRandomColors();
+        drawNext();
+        gameState = STATE.PLAYING;
+        setStatus("");
+        drawMain();
+      }
+
+      function getPieceBalls(
+        x = currentPiece.x,
+        y = currentPiece.y,
+        rot = currentPiece.rot,
+      ) {
+        if (!currentPiece) return [];
+        let c = currentPiece.colors;
+        let dx = BALL_RADIUS;
+        let dy = ROW_HEIGHT;
+        const states = [
+          [
+            { x: 0, y: 0, c: c[0] },
+            { x: -dx, y: dy, c: c[1] },
+            { x: dx, y: dy, c: c[2] },
+          ],
+          [
+            { x: dx, y: 0, c: c[0] },
+            { x: -dx, y: 0, c: c[1] },
+            { x: 0, y: dy, c: c[2] },
+          ],
+          [
+            { x: dx, y: dy, c: c[0] },
+            { x: 0, y: 0, c: c[1] },
+            { x: -dx, y: dy, c: c[2] },
+          ],
+          [
+            { x: 0, y: dy, c: c[0] },
+            { x: dx, y: 0, c: c[1] },
+            { x: -dx, y: 0, c: c[2] },
+          ],
+          [
+            { x: -dx, y: dy, c: c[0] },
+            { x: dx, y: dy, c: c[1] },
+            { x: 0, y: 0, c: c[2] },
+          ],
+          [
+            { x: -dx, y: 0, c: c[0] },
+            { x: 0, y: dy, c: c[1] },
+            { x: dx, y: 0, c: c[2] },
+          ],
+        ];
+        let state = states[rot];
+        return state.map((b) => ({ px: x + b.x, py: y + b.y, color: b.c }));
+      }
+
+      function checkCollision(nextX, nextY, nextRot) {
+        let balls = getPieceBalls(nextX, nextY, nextRot);
+        for (let b of balls) {
+          if (
+            b.px < X_OFFSET - 5 ||
+            b.px > X_OFFSET + (COLS - 1) * BALL_RADIUS * 2 + BALL_RADIUS + 5
+          )
+            return true;
+          let pos = getGridPos(b.px, b.py);
+          if (pos.r >= ROWS) return true;
+          if (
+            pos.r >= 0 &&
+            pos.r < ROWS &&
+            pos.c >= 0 &&
+            pos.c < COLS &&
+            grid[pos.r][pos.c] !== 0
+          )
+            return true;
+        }
+        return false;
+      }
+
+      function lockPiece() {
+        let balls = getPieceBalls(
+          currentPiece.x,
+          currentPiece.y,
+          currentPiece.rot,
+        );
+        balls.sort((a, b) => b.py - a.py);
+
+        for (let b of balls) {
+          let pos = getGridPos(b.px, b.py);
+          if (pos.r >= 0 && pos.r < ROWS && pos.c >= 0 && pos.c < COLS) {
+            let r = pos.r;
+            while (r >= 0 && grid[r][pos.c] !== 0) {
+              r -= 2;
+            }
+            if (r >= 0) grid[r][pos.c] = b.color;
+          }
+        }
+        currentPiece = null;
+        gameState = STATE.SETTLING;
+        setTimeout(() => applyGravity(false), 60);
+      }
+
+      function applyGravity(isChain) {
+        let moved = false;
+        let choiceTriggered = false;
+
+        for (let r = ROWS - 2; r >= 0; r--) {
+          for (let c = 0; c < COLS; c++) {
+            if (grid[r][c] !== 0) {
+              let isEven = r % 2 === 0;
+              let leftC = isEven ? c - 1 : c;
+              let rightC = isEven ? c : c + 1;
+
+              let leftOpen =
+                r + 1 < ROWS &&
+                leftC >= 0 &&
+                leftC < COLS &&
+                grid[r + 1][leftC] === 0;
+              let rightOpen =
+                r + 1 < ROWS &&
+                rightC >= 0 &&
+                rightC < COLS &&
+                grid[r + 1][rightC] === 0;
+
+              if (leftOpen && rightOpen) {
+                let canDropStraight = r + 2 < ROWS && grid[r + 2][c] === 0;
+                if (canDropStraight) {
+                  grid[r + 2][c] = grid[r][c];
+                  grid[r][c] = 0;
+                  moved = true;
+                } else {
+                  if (!isChain) {
+                    triggerChoice(r, c, leftC, rightC);
+                    return;
+                  } else {
+                    grid[r + 1][leftC] = grid[r][c];
+                    grid[r][c] = 0;
+                    moved = true;
+                  }
+                }
+              } else if (leftOpen) {
+                grid[r + 1][leftC] = grid[r][c];
+                grid[r][c] = 0;
+                moved = true;
+              } else if (rightOpen) {
+                grid[r + 1][rightC] = grid[r][c];
+                grid[r][c] = 0;
+                moved = true;
+              }
+            }
+          }
+        }
+
+        drawMain();
+        if (moved && !choiceTriggered) {
+          setTimeout(() => applyGravity(isChain), 60);
+        } else if (!choiceTriggered) {
+          checkAndErase();
+        }
+      }
+
+      function triggerChoice(r, c, leftC, rightC) {
+        gameState = STATE.CHOICE;
+        choiceData = {
+          r: r,
+          c: c,
+          color: grid[r][c],
+          options: [
+            { r: r + 1, c: leftC },
+            { r: r + 1, c: rightC },
+          ],
+          selectedIdx: 0,
+        };
+        grid[r][c] = 0;
+        setStatus("◀ 落下先を選択 ▶");
+        drawMain();
+      }
+
+      function getHexNeighbors(r, c) {
+        let isEven = r % 2 === 0;
+        let n = [
+          { r: r, c: c - 1 },
+          { r: r, c: c + 1 },
+          { r: r - 1, c: isEven ? c - 1 : c },
+          { r: r - 1, c: isEven ? c : c + 1 },
+          { r: r + 1, c: isEven ? c - 1 : c },
+          { r: r + 1, c: isEven ? c : c + 1 },
+        ];
+        return n.filter(
+          (p) => p.r >= 0 && p.r < ROWS && p.c >= 0 && p.c < COLS,
+        );
+      }
+
+      function checkAndErase() {
+        gameState = STATE.CHECKING;
+        let visited = Array.from({ length: ROWS }, () =>
+          Array(COLS).fill(false),
+        );
+        let toErase = [];
+
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            if (grid[r][c] === 0 || visited[r][c]) continue;
+            let color = grid[r][c];
+            let connected = [];
+            let queue = [{ r, c }];
+            visited[r][c] = true;
+
+            while (queue.length > 0) {
+              let curr = queue.shift();
+              connected.push(curr);
+
+              for (let n of getHexNeighbors(curr.r, curr.c)) {
+                if (!visited[n.r][n.c] && grid[n.r][n.c] === color) {
+                  visited[n.r][n.c] = true;
+                  queue.push(n);
+                }
+              }
+            }
+
+            if (connected.length >= 6) {
+              toErase.push(...connected);
+            }
+          }
+        }
+
+        if (toErase.length > 0) {
+          for (let p of toErase) {
+            grid[p.r][p.c] = 0;
+          }
+          comboCount++;
+          document.getElementById("scoreDisplay").innerText =
+            `${comboCount} 連鎖`;
+          setStatus(`🔥 ${comboCount} 連鎖！`);
+          drawMain();
+
+          gameState = STATE.SETTLING;
+          setTimeout(() => applyGravity(true), 400);
+        } else {
+          spawnPiece();
+        }
+      }
+
+      function moveHorizontal(dir) {
+        if (gameState === STATE.PLAYING) {
+          let nextX = currentPiece.x + dir * BALL_RADIUS;
+          if (!checkCollision(nextX, currentPiece.y, currentPiece.rot)) {
+            currentPiece.x = nextX;
+          }
+        } else if (gameState === STATE.CHOICE) {
+          choiceData.selectedIdx = dir === -1 ? 0 : 1;
+        }
+        drawMain();
+      }
+
+      function rotate() {
+        if (gameState === STATE.PLAYING) {
+          let nextRot = (currentPiece.rot + 1) % 6;
+          if (!checkCollision(currentPiece.x, currentPiece.y, nextRot)) {
+            currentPiece.rot = nextRot;
+          }
+          drawMain();
+        }
+      }
+
+      function dropStep() {
+        if (gameState === STATE.PLAYING && currentPiece) {
+          let step = 10;
+          if (
+            !checkCollision(
+              currentPiece.x,
+              currentPiece.y + step,
+              currentPiece.rot,
+            )
+          ) {
+            currentPiece.y += step;
+          } else {
+            while (
+              !checkCollision(
+                currentPiece.x,
+                currentPiece.y + 1,
+                currentPiece.rot,
+              )
+            ) {
+              currentPiece.y += 1;
+            }
+            lockPiece();
+          }
+          drawMain();
+        }
+      }
+
+      function hardDrop() {
+        if (gameState === STATE.PLAYING) {
+          while (
+            !checkCollision(
+              currentPiece.x,
+              currentPiece.y + 5,
+              currentPiece.rot,
+            )
+          ) {
+            currentPiece.y += 5;
+          }
+          while (
+            !checkCollision(
+              currentPiece.x,
+              currentPiece.y + 1,
+              currentPiece.rot,
+            )
+          ) {
+            currentPiece.y += 1;
+          }
+          lockPiece();
+        } else if (gameState === STATE.CHOICE) {
+          let opt = choiceData.options[choiceData.selectedIdx];
+          grid[opt.r][opt.c] = choiceData.color;
+          choiceData = null;
+          setStatus("");
+          gameState = STATE.SETTLING;
+          setTimeout(() => applyGravity(false), 60);
+        }
+        drawMain();
+      }
+
+      function drawCircle(ctx, x, y, colorIdx, highlight = false, alpha = 1) {
+        if (colorIdx === 0) {
+          ctx.fillStyle = "#222";
+          ctx.beginPath();
+          ctx.arc(x, y, 3, 0, Math.PI * 2);
+          ctx.fill();
+          return;
+        }
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = highlight ? "#fff" : COLORS[colorIdx];
+        ctx.beginPath();
+        ctx.arc(x, y, BALL_RADIUS - 1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.3)";
+        ctx.beginPath();
+        ctx.arc(x - 4, y - 4, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+      }
+
+      function drawMain() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            let x =
+              X_OFFSET + c * BALL_RADIUS * 2 + (r % 2 === 1 ? BALL_RADIUS : 0);
+            let y = Y_OFFSET + r * ROW_HEIGHT;
+            drawCircle(ctx, x, y, grid[r][c]);
+          }
+        }
+        if (gameState === STATE.PLAYING && currentPiece) {
+          for (let b of getPieceBalls()) drawCircle(ctx, b.px, b.py, b.color);
+        }
+        if (gameState === STATE.CHOICE && choiceData) {
+          for (let i = 0; i < choiceData.options.length; i++) {
+            let opt = choiceData.options[i];
+            let x =
+              X_OFFSET +
+              opt.c * BALL_RADIUS * 2 +
+              (opt.r % 2 === 1 ? BALL_RADIUS : 0);
+            let y = Y_OFFSET + opt.r * ROW_HEIGHT;
+            if (i === choiceData.selectedIdx) {
+              drawCircle(ctx, x, y, choiceData.color, true);
+              ctx.strokeStyle = "#ff4757";
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(x, y, BALL_RADIUS + 2, 0, Math.PI * 2);
+              ctx.stroke();
+            } else {
+              drawCircle(ctx, x, y, choiceData.color, false, 0.3);
+            }
+          }
+        }
+      }
+
+      function drawNext() {
+        nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
+        let cx = 40,
+          cy = 35;
+        drawCircle(nextCtx, cx, cy, nextColors[0]);
+        drawCircle(nextCtx, cx - BALL_RADIUS, cy + ROW_HEIGHT, nextColors[1]);
+        drawCircle(nextCtx, cx + BALL_RADIUS, cy + ROW_HEIGHT, nextColors[2]);
+      }
+
+      function setStatus(msg) {
+        document.getElementById("statusDisplay").innerText = msg;
+      }
+
+      window.addEventListener("keydown", (e) => {
+        if (
+          ["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].indexOf(
+            e.code,
+          ) > -1
+        ) {
+          e.preventDefault();
+        }
+        if (e.key === "ArrowLeft") moveHorizontal(-1);
+        if (e.key === "ArrowRight") moveHorizontal(1);
+        if (e.key === "ArrowUp") rotate();
+        if (e.key === "ArrowDown") dropStep();
+        if (e.key === " ") hardDrop();
+      });
+
+      document.getElementById("btnLeft").onclick = () => moveHorizontal(-1);
+      document.getElementById("btnRight").onclick = () => moveHorizontal(1);
+      document.getElementById("btnUp").onclick = rotate;
+      document.getElementById("btnDown").onclick = dropStep;
+      document.getElementById("btnDrop").onclick = hardDrop;
+
+      spawnPiece();
+    </script>
+  </body>
+</html>
